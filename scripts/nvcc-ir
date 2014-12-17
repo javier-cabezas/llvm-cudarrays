@@ -1,0 +1,93 @@
+#!/bin/sh
+
+TEMPLATE_GDB="set \$output = \"___OUTFILE___\" 
+\nset logging file /dev/null
+\nset logging on
+\nset logging redirect on
+\nset confirm off
+\nset breakpoint pending on
+\nbreak do_system if strstr(line, \"cicc\")
+\ncommands
+\nsilent
+\nset follow-fork-mode child
+\ncontinue
+\nend
+\nbreak ___BREAKSYM___
+\ncommands
+\nsilent
+\nprint dup(2)
+\nprint fopen(\$output, \"w\")
+\nprint dup2(fileno(\$2), 2)
+\nprint _ZNK4llvm6Module4dumpEv(\$___REGISTER___)
+\nprint fclose(\$2)
+\nprint dup2(\$1, 2)
+\ncontinue
+\nend
+\ncontinue
+\nquit"
+
+NVCC_FLAGS=""
+
+do_cuda()
+{
+    FILE=$1
+    SYMBOL=$2
+    REGISTER=$3
+
+    FILE=`echo $FILE | sed -e 's/\//\\\\\//g'`
+
+    TEMPLATE_GDB=`echo $TEMPLATE_GDB | sed "s/___OUTFILE___/$FILE/g"`
+    TEMPLATE_GDB=`echo $TEMPLATE_GDB | sed "s/___BREAKSYM___/$SYMBOL/g"`
+    TEMPLATE_GDB=`echo $TEMPLATE_GDB | sed "s/___REGISTER___/$REGISTER/g"`
+
+    TEMP_FILE=`tempfile`
+    echo -e $TEMPLATE_GDB > $TEMP_FILE
+    # cat $TEMP_FILE
+
+    ${CUDA_HOME}/bin/nvcc $NVCC_FLAGS &
+
+    gdb -batch-silent -x ${TEMP_FILE} -p $!
+    rm ${TEMP_FILE}
+}
+
+do_cuda_50()
+{
+    SYMBOL="_ZN4llvm15NVPTXAsmPrinter16doInitializationERNS_6ModuleE"
+    REGISTER="rsi"
+
+    do_cuda $1 $SYMBOL $REGISTER
+}
+
+do_cuda_55()
+{
+    SYMBOL="llvm::Module::~Module"
+    REGISTER="rdi"
+
+    do_cuda $1 $SYMBOL $REGISTER
+
+    # Strip malformed bitcast that does not work for llvm 3.4 and newer
+    sed -i -e "s/@llvm.used/; @llvm.used/" $1
+}
+
+NVCC_FLAGS="$*"
+
+if [ "x${LLVM_OUT}" = "x" ]
+then
+    LLVM_OUT="output.ll"
+fi
+
+if [ "x${CUDA_HOME}" = "x" ]
+then
+    CUDA_HOME=/usr
+fi
+
+VERSION=`${CUDA_HOME}/bin/nvcc --version | tail -n1 | cut -f2 -d,`
+
+echo "Myversion: ${VERSION}"
+
+case "$VERSION" in
+    " release 5.0") do_cuda_50 $LLVM_OUT ;;
+    " release 5.5") do_cuda_55 $LLVM_OUT ;;
+    " release 6.0") do_cuda_55 $LLVM_OUT ;;
+    *) echo "" ;;
+esac
