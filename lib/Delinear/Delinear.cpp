@@ -11,11 +11,10 @@
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/InstIterator.h"
-#include "llvm/Support/system_error.h"
 
 #include "CUDArraysDriver.h"
 #include "CUDArraysRTDriver.h"

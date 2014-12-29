@@ -8,7 +8,7 @@ using namespace llvm;
 
 namespace platonic {
 
-static uint64_t evaluate(const SCEV *scev, DataLayout &DL) {
+static uint64_t evaluate(const SCEV *scev, const DataLayout &DL) {
 
   if (const SCEVMulExpr *stride = dyn_cast<SCEVMulExpr>(scev)) {
     uint64_t result = 1;
@@ -44,7 +44,7 @@ static uint64_t evaluate(const SCEV *scev, DataLayout &DL) {
   assert(false && "Unimplemented");
 }
 
-uint64_t getStride(Value *pointer, ScalarEvolution &SE, DataLayout &DL) {
+uint64_t getStride(Value *pointer, ScalarEvolution &SE, const DataLayout &DL) {
   const SCEV *scev = SE.getSCEV(pointer);
   const SCEVAddRecExpr *addrec = dyn_cast<SCEVAddRecExpr>(scev);
   if (!addrec) return 0;
@@ -54,12 +54,12 @@ uint64_t getStride(Value *pointer, ScalarEvolution &SE, DataLayout &DL) {
   return evaluate(stepRecur, DL);
 }
 
-uint64_t getUnitStride(Value *pointer, DataLayout &DL) {
+uint64_t getUnitStride(Value *pointer, const DataLayout &DL) {
   Type *strideType = pointer->getType()->getPointerElementType();
   return DL.getTypeAllocSize(strideType);
 }
 
-bool isNonUnitStride(Value *pointer, ScalarEvolution &SE, DataLayout &DL) {
+bool isNonUnitStride(Value *pointer, ScalarEvolution &SE, const DataLayout &DL) {
   uint64_t stride = getStride(pointer, SE, DL);
   return stride && stride != getUnitStride(pointer, DL);
 }

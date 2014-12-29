@@ -86,7 +86,7 @@ class ChicagoDLT : public ModulePass {
 
   template<class T>
   bool runOnMemOper(T *oper, const SCEV *btc, ScalarEvolution &SE) {
-    DataLayout &DL = getAnalysis<DataLayout>();
+    const DataLayout &DL = getAnalysis<DataLayoutPass>().getDataLayout();
     Value *pointer = oper->getPointerOperand();
     if(!isNonUnitStride(pointer, SE, DL))
       return false;
@@ -106,7 +106,7 @@ class ChicagoDLT : public ModulePass {
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const {
-    AU.addRequired<DataLayout>();
+    AU.addRequired<DataLayoutPass>();
     AU.addRequired<LoopInfo>();
     AU.addRequired<ScalarEvolution>();
   }

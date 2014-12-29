@@ -1,11 +1,11 @@
 #include "DbgLinePrinter.h"
 
-#include "llvm/DebugInfo.h"
+#include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/system_error.h"
+// #include "llvm/Support/system_error.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -52,7 +52,7 @@ static bool getDebugInfo(DebugInfo &result, const Instruction *inst) {
     std::string filename =
       std::string(dir->getString()) + "/" + std::string(file->getString());
 
-    ConstantInt *lineVal = dyn_cast<ConstantInt>(node->getOperand(0));
+    ConstantInt *lineVal = dyn_cast<ConstantInt>(inst->getOperand(0));
     if(!lineVal) return false;
 
     result = DebugInfo(filename, lineVal->getLimitedValue());
@@ -62,12 +62,12 @@ static bool getDebugInfo(DebugInfo &result, const Instruction *inst) {
 
 template<class T>
 static void printSourceLine(T &out, StringRef filename, unsigned line) {
-  llvm::OwningPtr<llvm::MemoryBuffer> file;
-
-  if(llvm::MemoryBuffer::getFile(filename, file)) {
+  auto errorOrFileBuffer = llvm::MemoryBuffer::getFile(filename);
+  if (!errorOrFileBuffer) {
     out << "<Missing file: " << filename << ">";
     return;
   }
+  std::unique_ptr<llvm::MemoryBuffer> file = std::move(errorOrFileBuffer.get());
 
   const char *start = file->getBufferStart();
   for(unsigned i = 1; start < file->getBufferEnd() && i < line; ++i) {

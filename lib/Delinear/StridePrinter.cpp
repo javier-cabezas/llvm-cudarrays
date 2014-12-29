@@ -83,7 +83,7 @@ class StridePrinter : public ModulePass {
 
   template<class T>
   bool runOnMemOper(T *oper, ScalarEvolution &SE) {
-    DataLayout &DL = getAnalysis<DataLayout>();
+    const DataLayout &DL = getAnalysis<DataLayoutPass>().getDataLayout();
     Value *pointer = oper->getPointerOperand();
     if(!isNonUnitStride(pointer, SE, DL))
       return false;
@@ -97,7 +97,7 @@ class StridePrinter : public ModulePass {
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const {
-    AU.addRequired<DataLayout>();
+    AU.addRequired<DataLayoutPass>();
     AU.addRequired<LoopInfo>();
     AU.addRequired<ScalarEvolution>();
   }

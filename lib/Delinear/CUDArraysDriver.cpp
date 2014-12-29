@@ -3,6 +3,7 @@
 #include "llvm/ADT/Triple.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Host.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -61,11 +62,13 @@ CUDArraysDriver::~CUDArraysDriver() {
   // Functions must end with a ret instruction
   builder.CreateRetVoid();
   // Write module to file
-  std::string errMsg;
-  // raw_fd_ostream file(File.c_str(), errMsg, llvm::sys::fs::OpenFlags::F_RW);
-  raw_fd_ostream file(File.c_str(), errMsg);
-  if(errMsg.size())
-    errs() << errMsg << "\n";
+  std::error_code EC;
+  //raw_fd_ostream file(File.c_str(), EC, llvm::sys::fs::OpenFlags::F_RW);
+  raw_fd_ostream file(File.c_str(), EC, llvm::sys::fs::OpenFlags::F_RW);
+  //std::string errMsg;
+  // raw_fd_ostream file(File.c_str(), errMsg);
+  //if(errMsg.size())
+  //  errs() << errMsg << "\n";
   M->print(file, NULL);
   delete M;
   delete C;
