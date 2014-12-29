@@ -7,6 +7,7 @@
 // This code is in the public domain
 //
 #include <cstdio>
+#include <iostream>
 #include <set>
 #include <string>
 #include <sstream>
@@ -15,14 +16,17 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/Basic/DiagnosticOptions.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendAction.h"
+#include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Frontend/Utils.h"
 #include "clang/Lex/HeaderSearch.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Parse/ParseAST.h"
 #include "clang/Rewrite/Core/Rewriter.h"
+#include "clang/Sema/Sema.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
 
@@ -78,10 +82,15 @@ class FindNamedClassVisitor
         {
             auto &srcMgr = rewriter_.getSourceMgr();
 
-            assert(srcMgr.getFileID(range.getBegin()) == srcMgr.getFileID(range.getEnd()));
+            assert(range.isValid() && "Invalid range");
 
             unsigned begin = srcMgr.getFileOffset(range.getBegin());
             unsigned end   = srcMgr.getFileOffset(range.getEnd());
+            llvm::outs() << srcMgr.getFilename(range.getBegin()) << "\n";
+            llvm::outs() << srcMgr.getFilename(range.getEnd()) << "\n";
+            llvm::outs() << begin << "\n";
+            llvm::outs() << end << "\n";
+            assert(srcMgr.getFileID(range.getBegin()) == srcMgr.getFileID(range.getEnd()));
 
             unsigned size = (end - begin) + 1;
 
@@ -100,7 +109,7 @@ class FindNamedClassVisitor
                 {
                     auto val = arg.getAsIntegral();
                     if (val.isSigned()) {
-                        int64_t v = *(int64_t *)val.getRawData();
+                        int64_t v = *(const int64_t *)val.getRawData();
                         ret << v;
                     } else {
                         uint64_t v = *val.getRawData();
@@ -125,7 +134,7 @@ class FindNamedClassVisitor
             }   break;
             case TemplateArgument::Expression: {
                 Expr *expr = arg.getAsExpr();
-                std::string strExpr = rewriter_.ConvertToString(expr);
+                std::string strExpr = getSourceFromRange(expr->getSourceRange()); // rewriter_.ConvertToString(expr);
                 ret << strExpr;
             } break;
             case TemplateArgument::Pack:
@@ -178,6 +187,7 @@ class FindNamedClassVisitor
         };
 
         struct FunctionInstInfo {
+            SourceManager &srcMgr;
             FunctionInfo &fun;
 
             std::vector<std::string> params; // Types
@@ -194,13 +204,16 @@ class FindNamedClassVisitor
                 const FunctionTemplateDecl *tmpl; // For the rest
             } decl;
 
-            FunctionInstInfo(FunctionInfo &info, FunctionDecl *f, CUDAFunInfo _cudaFunInfo) :
+            FunctionInstInfo(FunctionInfo &info, FunctionDecl *f, CUDAFunInfo _cudaFunInfo, SourceManager &_srcMgr) :
+                srcMgr(_srcMgr),
                 fun(info),
                 narrays(0),
                 cudaFunInfo(_cudaFunInfo),
                 declType(f->isThisDeclarationADefinition()? DT_Definition : DT_Declaration),
                 tmplKind(f->getTemplatedKind())
             {
+                decl.tmpl = nullptr;
+
                 if (tmplKind == FunctionDecl::TK_FunctionTemplate)
                     decl.tmpl = f->getDescribedFunctionTemplate();
                 else {
@@ -210,6 +223,7 @@ class FindNamedClassVisitor
                 if (decl.tmpl == nullptr) abort();
 
                 if (tmplKind == FunctionDecl::TK_FunctionTemplate) {
+                    llvm::outs() << "CUCU\n";
                     // We only handle implicit instantiations in TK_FunctionTemplate
                     for (auto spec = decl.tmpl->spec_begin(); spec != decl.tmpl->spec_end(); ++spec) {
                         FunctionTemplateSpecializationInfo *info = spec->getTemplateSpecializationInfo();
@@ -222,6 +236,7 @@ class FindNamedClassVisitor
                                 fun.tmplImplicitInst.push_back(*spec);
                         }
                     }
+                } else if (tmplKind == FunctionDecl::TK_NonTemplate) {
                 }
 
                 unsigned a = 0;
@@ -239,8 +254,11 @@ class FindNamedClassVisitor
             {
                 if (tmplKind == FunctionDecl::TK_FunctionTemplate)
                     return decl.tmpl->getSourceRange();
-                else
-                    return decl.fun->getSourceRange();
+                else {
+                    SourceLocation b = decl.fun->getSourceRange().getBegin();
+                    SourceLocation e = decl.fun->getSourceRange().getEnd();
+                    return SourceRange(srcMgr.getFileLoc(b), srcMgr.getFileLoc(e));
+                }
             }
 
             std::pair<SourceLocation, SourceLocation>
@@ -342,8 +360,7 @@ class FindNamedClassVisitor
                 // llvm::outs() << "New function: " << name << " : " << strProto << "\n";
                 FunctionInfo info;
                 info.name = name;
-                //info.ret  = f->getReturnType().getAsString();
-                info.ret  = f->getResultType().getAsString();
+                info.ret  = f->getReturnType().getAsString();
                 info.prototype = strProto;
 
                 functions_.insert({ id,  info });
@@ -424,9 +441,8 @@ class FindNamedClassVisitor
 
             FunctionInfo &funInfo = getCurrentFunction(f);
 
-            currDecl_ = new FunctionInstInfo{funInfo, f, CUDAInfo};
-
-            // llvm::outs() << funInfo.name << "\n";
+            currDecl_ = new FunctionInstInfo{funInfo, f, CUDAInfo, rewriter_.getSourceMgr()};
+            llvm::outs() << funInfo.name << "\n";
 
             // Duplicate the function to keep the original version
             rewriter_.InsertTextBefore(currDecl_->getSourceRange().getBegin(),
@@ -677,6 +693,29 @@ private:
     FindNamedClassVisitor visitor_;
 };
 
+// For each source file provided to the tool, a new FrontendAction is created.
+class MyFrontendAction : public ASTFrontendAction {
+public:
+  MyFrontendAction() {}
+  void EndSourceFileAction() override {
+    SourceManager &SM = TheRewriter.getSourceMgr();
+    llvm::errs() << "** EndSourceFileAction for: "
+                 << SM.getFileEntryForID(SM.getMainFileID())->getName() << "\n";
+
+    // Now emit the rewritten buffer.
+    TheRewriter.getEditBuffer(SM.getMainFileID()).write(llvm::outs());
+  }
+
+  std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
+                                                 StringRef file) override {
+    llvm::errs() << "** Creating AST consumer for: " << file << "\n";
+    TheRewriter.setSourceMgr(CI.getSourceManager(), CI.getLangOpts());
+    return llvm::make_unique<FindNamedClassConsumer>(CI.getASTContext(), TheRewriter);
+  }
+
+private:
+  Rewriter TheRewriter;
+};
 
 // Apply a custom category to all command-line options so that they are the
 // only ones displayed.
@@ -694,75 +733,124 @@ static cl::list<std::string> FileNames(cl::Positional,
 
 int main(int argc, const char **argv)
 {
-    // tooling::CommonOptionsParser OptionsParser(argc, argv);
+  tooling::CommonOptionsParser op(argc, argv, MyToolCategory);
+  tooling::ClangTool Tool(op.getCompilations(), op.getSourcePathList());
+
+  // ClangTool::run accepts a FrontendActionFactory, which is then used to
+  // create new objects implementing the FrontendAction interface. Here we use
+  // the helper newFrontendActionFactory to create a default factory that will
+  // return a new MyFrontendAction object every time.
+  // To further customize this, we could create our own factory class.
+  return Tool.run(tooling::newFrontendActionFactory<MyFrontendAction>().get());
+}
+
+#if 0
+int main(int argc, const char **argv)
+{
+    tooling::CommonOptionsParser OptionsParser(argc, argv, MyToolCategory);
     cl::ParseCommandLineOptions(argc, argv);
 
     if (FileNames.size() != 1) {
         printf("BULLSHIT1\n");
     }
 
+    DiagnosticOptions diagnosticOptions;
+    TextDiagnosticPrinter *pTextDiagnosticPrinter =
+        new TextDiagnosticPrinter(
+                llvm::outs(),
+                &diagnosticOptions);
+    llvm::IntrusiveRefCntPtr<clang::DiagnosticIDs> pDiagIDs;
+    clang::DiagnosticsEngine *pDiagnosticsEngine =
+        new clang::DiagnosticsEngine(pDiagIDs,
+                &diagnosticOptions,
+                pTextDiagnosticPrinter);
+
     auto path = FileNames[0];
 
     // CompilerInstance will hold the instance of the Clang compiler for us,
     // managing the various objects needed to run the compiler.
     CompilerInstance compiler;
-    compiler.createDiagnostics(nullptr, false);
+    //compiler.createDiagnostics(pTextDiagnosticPrinter, false);
 
-    CompilerInvocation::setLangDefaults(compiler.getLangOpts(), IK_CUDA);
+    LangOptions langOpts;
+    CompilerInvocation::setLangDefaults(langOpts, IK_CUDA);
 
     // Initialize target info with the default triple for our platform.
-    auto *TO = new TargetOptions();
+    auto TO = std::make_shared<TargetOptions>();
     TO->Triple = llvm::sys::getDefaultTargetTriple();
-    TargetInfo *TI = TargetInfo::CreateTargetInfo(compiler.getDiagnostics(), TO);
-    compiler.setTarget(TI);
+    TargetInfo *TI = TargetInfo::CreateTargetInfo(*pDiagnosticsEngine, TO);
+    //compiler.setTarget(TI);
 
-    compiler.createFileManager();
-    FileManager &fileMgr = compiler.getFileManager();
-    compiler.createSourceManager(fileMgr);
-    SourceManager &srcMgr = compiler.getSourceManager();
+    FileSystemOptions fsOpts;
+    FileManager fileMgr(fsOpts);
+    //compiler.createSourceManager(fileMgr);
+    // SourceManager &srcMgr = compiler.getSourceManager();
+    //
+    SourceManager srcMgr(*pDiagnosticsEngine, fileMgr);
 
-    //compiler.createPreprocessor(clang::TranslationUnitKind::TU_Complete);
-#if 0
-    HeaderSearchOptions *headerOpts = new HeaderSearchOptions;
+#if 1
+    llvm::IntrusiveRefCntPtr<HeaderSearchOptions> headerOpts(new HeaderSearchOptions());
 
-    headerOpts->AddSystemHeaderPrefix("/usr/include", true);
-    headerOpts->AddSystemHeaderPrefix("/usr/include/c++/4.8", true);
+    headerOpts->AddPath("/usr/include",         frontend::System,    false, true);
+    headerOpts->AddPath("/usr/include/c++/4.9", frontend::CXXSystem, false, true);
 
-    HeaderSearch headers(headerOpts, fileMgr, compiler.getDiagnostics(), compiler.getLangOpts(), TI);
+    HeaderSearch headers(headerOpts, srcMgr, *pDiagnosticsEngine, langOpts, TI);
 
-    ApplyHeaderSearchOptions(headers, *headerOpts, compiler.getLangOpts(), compiler.getTarget().getTriple());
+    ApplyHeaderSearchOptions(headers, *headerOpts, langOpts, TI->getTriple());
 
-    Preprocessor PP(new PreprocessorOptions(), compiler.getDiagnostics(), compiler.getLangOpts(), TI,
-                    srcMgr, headers, compiler,
-                    /*IILookup =*/ 0,
-                    /*OwnsHeaderSearch =*/false,
-                    /*DelayInitialization =*/ false);
+    auto PPOpts = llvm::IntrusiveRefCntPtr<clang::PreprocessorOptions>(new PreprocessorOptions());
 
+    Preprocessor PP(PPOpts, *pDiagnosticsEngine, langOpts,
+                    srcMgr, headers, compiler);
 
+    PP.Initialize(*TI);
+
+    FrontendOptions frontendOptions;
+    InitializePreprocessor(PP, *PPOpts, frontendOptions);
+
+    // compiler.setPreprocessor(&PP);
+#else
+    compiler.createPreprocessor(clang::TranslationUnitKind::TU_Complete);
+    //compiler.createPreprocessor();
+#endif
     auto &preprocessor = PP;
 
-    compiler.setPreprocessor(&PP);
-#else
-    compiler.createPreprocessor();
-    auto &preprocessor = compiler.getPreprocessor();
-#endif
+    IdentifierTable identifierTable(langOpts);
+    SelectorTable selectorTable;
 
-    compiler.createASTContext();
+    Builtin::Context builtinContext;
+    builtinContext.InitializeTarget(*TI);
+    ASTContext astContext(
+            langOpts,
+            srcMgr,
+            identifierTable,
+            selectorTable,
+            builtinContext);
+
+    astContext.InitBuiltinTypes(*TI);
 
     // A Rewriter helps us manage the code rewriting task.
     Rewriter rewriter;
-    rewriter.setSourceMgr(srcMgr, compiler.getLangOpts());
+    rewriter.setSourceMgr(srcMgr, langOpts);
 
     // Set the main file handled by the source manager to the input file.
-    const FileEntry *FileIn = fileMgr.getFile(path);
-    srcMgr.createMainFileID(FileIn);
-    compiler.getDiagnosticClient().BeginSourceFile(
-            compiler.getLangOpts(),
-            &preprocessor);
+    auto errorOrFileBuffer = llvm::MemoryBuffer::getFile(path);
+    if (!errorOrFileBuffer) {
+        std::cout << "<Missing file: " << path << ">";
+        return -1;
+    }
 
-    FindNamedClassConsumer consumer(compiler.getASTContext(), rewriter);
-    ParseAST(preprocessor, &consumer,
-             compiler.getASTContext());
+    FileID id = srcMgr.createFileID(std::move(errorOrFileBuffer.get()));
+    srcMgr.setMainFileID(id);
+    FindNamedClassConsumer consumer(astContext, rewriter);
+
+    Sema sema(preprocessor, astContext, consumer);
+
+    std::cout << "CUCU1\n";
+    pTextDiagnosticPrinter->BeginSourceFile(langOpts, &PP);
+    ParseAST(preprocessor, &consumer, astContext);
+    pTextDiagnosticPrinter->EndSourceFile();
+    std::cout << "CUCU2\n";
 
     // At this point the rewriter's buffer should be full with the rewritten
     // file contents.
@@ -773,3 +861,4 @@ int main(int argc, const char **argv)
 
     return 0;
 }
+#endif

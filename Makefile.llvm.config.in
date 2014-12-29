@@ -136,6 +136,7 @@ FIND       := @FIND@
 GREP       := @GREP@
 INSTALL    := @INSTALL@
 MKDIR      := $(PROJ_SRC_ROOT)/autoconf/mkinstalldirs
+MKDIR      := @MKDIR@
 MV         := @MV@
 RANLIB     := @RANLIB@
 RM         := @RM@

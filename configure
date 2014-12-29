@@ -10382,7 +10382,7 @@ _ACEOF
 if test "${with_llvm_buildmode+set}" = set; then :
   withval=$with_llvm_buildmode;
 else
-  with_llvm_buildmode=Debug+Assertastas
+  with_llvm_buildmode=Debug+Asserts
 fi
 
 
